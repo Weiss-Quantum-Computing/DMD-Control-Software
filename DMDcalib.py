@@ -3,6 +3,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import random
 import math
+import json
+
+class JSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if hasattr(obj, 'to_dict'):
+            return obj.to_dict(orient='records')
+        return json.JSONEncoder.default(self, obj)
 
 dmdX = 1280
 dmdY = 800
@@ -17,9 +24,9 @@ def setup():
     maxsizeX = dmdX//cols
     maxsizeY = dmdY//rows
     bs = min(maxsizeX, maxsizeY)
-    if bs%2==0:
-        bs-=1
     beamsize = int(input("Enter desired beam size: ") or str(bs))
+    if beamsize%2==0:
+        beamsize-=1
 
     #e.g. centerX=400 places the center 400 pixels from the left edge, centerY=200 places the center 200 pixels from the top edge
     centerX = int(input("Enter desired center (x): ") or str(dmdX//2))
@@ -36,7 +43,6 @@ def setup():
         for k in range(beamsize):
             dfEntries.append((j,k))
 
-camArray = [[5,4,3,5],[5,3,4,5],[1,3,4,5],[5,2,4,5]]
 def processCamData(camData):
 #takes intensity array from Bryant's program
 
@@ -56,18 +62,21 @@ def calibSetup():
         y = p[1]
         w0 = 30
         weight = math.exp(((x-center)**2+(y-center)**2)/(-2*w0**2))
-        weightdf.at[x,y]=weight
+        weightdf.iat[y,x]=weight
+
+    weightdf /= weightdf.to_numpy().sum()
 
     #sets total intensity
     fullInten = pd.DataFrame([[255]*beamsize]*beamsize)
     maxInten = weightdf.mul(fullInten)
     maxInt = maxInten.to_numpy().sum()
 
-def calibrate():
-#iterates once on intensity calibration with input from camera program, this function is meant to be called repeatedly
+camArray = [[5,4,3,5],[5,3,4,5],[1,3,4,5],[5,2,4,5]]
+
+def calibrate(camArray):
+#finds first iteration of calbirated array
 #we want updated camera data each time we iterate
 
-    # camArray = getCamData()
     flatCalibArr = processCamData(camArray)
     global calibDict
     intenTol = float(input("Enter the desired tolerance in intensity: ") or "0.1")
@@ -105,6 +114,86 @@ def calibrate():
             totInten = weightdf.mul(currentdf)
             totInt = totInten.to_numpy().sum()
             actualInt = (totInt/maxInt)*100
+        
+    with open('calibSave.json', 'w') as fp:
+        json.dump(calibDict, fp, cls=JSONEncoder)
+
+    with open('intenSave.txt', 'w') as filehandle:
+        json.dump(camArray, filehandle)
+
+    #saves calibDict and camArray to external files calibSave and intenSave
+
+def iterCal(camArray):
+
+    global calibDict
+    data = json.load(open('calibSave.json'))
+    calibDict = {
+        key: pd.DataFrame(data[key])
+        for key in data
+    }
+    
+    with open('intenSave.txt', 'r') as filehandle:
+        refInten = json.load(filehandle)
+    #accesses external file calibSave and set it equal to global calibDict, access intenSave and set it equal to refInten
+    flatCalibArr = np.ravel(np.divide(camArray,refInten))
+    refFlat = processCamData(refInten)
+
+    intenTol = float(input("Enter the desired tolerance in intensity: ") or "0.1")
+    for i in range(1,cols*rows+1):
+
+        inten = flatCalibArr[i-1]
+        inten*=100
+        refInt = refFlat[i-1]
+        refInt*=100
+        currentdf = calibDict["b{}".format(i)]
+        currentdf.columns = range(currentdf.columns.size)
+
+        totInten = weightdf.mul(currentdf)
+        totInt = totInten.to_numpy().sum()
+        calibInt = (totInt/maxInt)*100
+
+        #gives random sample of pixels to be turned off
+        n = math.floor((abs(inten-refInt))/100*beamsize*beamsize)
+        randoff = random.sample(dfEntries, n)
+
+        for p in randoff:
+            row = p[0]
+            col = p[1]
+            if inten>refInt:
+                currentdf.iat[row,col] = 0
+            else:
+                currentdf.iat[row,col] = 255
+
+        totInten = weightdf.mul(currentdf)
+        totInt = totInten.to_numpy().sum()
+        actualInt = (totInt/maxInt)*100
+
+        newTarget = calibInt-(inten-refInt)
+
+        while actualInt<newTarget-intenTol or actualInt>newTarget+intenTol:
+            n = math.floor((abs(newTarget-actualInt)/100*beamsize*beamsize))
+            randoff = random.sample(dfEntries, n)
+
+            for p in randoff:
+                row = p[0]
+                col = p[1]
+                if actualInt>newTarget:
+                    currentdf.at[row,col] = 0
+                else:
+                    currentdf.at[row,col] = 255
+
+            totInten = weightdf.mul(currentdf)
+            totInt = totInten.to_numpy().sum()
+            actualInt = (totInt/maxInt)*100
+
+        print(actualInt)
+
+    with open('calibSave.json', 'w') as fp:
+        json.dump(calibDict, fp, cls=JSONEncoder)
+
+    #save calibDict to external file calibSave
+
+
 
 #Wraps active area so that entire dataframe is 1280x800
 def wrap(active):
@@ -271,10 +360,15 @@ def checkertwo():
 
 setup()
 calibSetup()
-calibrate()
+#camArray = getCamData(), each new camArray is retrieved from camera intensity program
+camArray = [[5,4,3,5],[5,3,4,5],[1,3,4,5],[5,2,4,5]]
+calibrate(camArray)
+camArray = [[1.1,0.9,1,1],[1,1,1,1],[1,1,1,1],[1,1,1,1]]
+iterCal(camArray)
+
 
 imgs = createLibrary()
-image = imgs["img20"]
+image = imgs["img2"]
 ig = image.to_numpy()
 vis = plt.imshow(ig)
 vis.set_cmap('binary')
@@ -288,4 +382,3 @@ def dmdIn():
         image = np.ravel(ndArr)
         DMDseq.extend(image)
     return DMDseq
-
