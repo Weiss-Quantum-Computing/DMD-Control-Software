@@ -3,382 +3,211 @@ import numpy as np
 import matplotlib.pyplot as plt
 import random
 import math
-import json
+import itertools
+import beamtracking
 
-class JSONEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if hasattr(obj, 'to_dict'):
-            return obj.to_dict(orient='records')
-        return json.JSONEncoder.default(self, obj)
+#uses 2D numpy arrays instead of dataframes, calibrated stored as list 49 separate calibrated beams
 
 dmdX = 1280
 dmdY = 800
 
 def setup():
     #allows user to specify m x n beams
-    global cols, rows, beamsize, centerX, centerY, calibDict, dfEntries
-    cols = int(input("Enter # of beams (columns): "))
-    rows = int(input("Enter # of beams (rows): "))
+    global cols, rows, beamsize, centerX, centerY, calibrated, minX, minY
+    cols = 7
+    rows = 7
 
-    #Maximizes beam size by default
-    maxsizeX = dmdX//cols
-    maxsizeY = dmdY//rows
-    bs = min(maxsizeX, maxsizeY)
-    beamsize = int(input("Enter desired beam size: ") or str(bs))
+    #enter desired square beamsize, before transformation into parallelograms
+    beamsize = 50
     if beamsize%2==0:
         beamsize-=1
 
     #e.g. centerX=400 places the center 400 pixels from the left edge, centerY=200 places the center 200 pixels from the top edge
-    centerX = int(input("Enter desired center (x): ") or str(dmdX//2))
-    centerY = int(input("Enter desired center (y): ") or str(dmdY//2))
+    centerX = 640
+    centerY = 400
 
-    #Creates m*n beams initialized to "on"
-    calibDict = {}
-    for i in range(1,cols*rows+1):
-        calibDict["b{}".format(i)] = pd.DataFrame([[255]*beamsize]*beamsize)
+    minX = centerX-cols*beamsize//2
+    minY = centerY-rows*beamsize//2
 
-    #creates dfEntries to access elements of dataframe as tuple
-    dfEntries = []
-    for j in range(beamsize):
-        for k in range(beamsize):
-            dfEntries.append((j,k))
+    #Creates "calibrated" which is our baseline array which will be our reference for the calibrated "on" beams
+    #will be all 0 outside of active area, during the setup it will set all beams to full and calibrate it down from there
+    calibrated = []
 
 def processCamData(camData):
-#takes intensity array from Bryant's program
+#takes intensity array from camera program and flattens and normalizes it, assuming camData is m by n array of unnormalized intensities
 
     intenArr = np.array(camData)
     min = intenArr.min()
     calibArr = min/intenArr
-    flatCalibArr = np.ravel(calibArr)
-    return flatCalibArr
+    return calibArr
 
 def calibSetup():
-#creates a Gaussian weighted dataframe, w0 dependent on beamsize
-    global weightdf, maxInt
-    weightdf = pd.DataFrame([[0]*beamsize]*beamsize)
-    for p in dfEntries:
-        center=(beamsize-1)/2
-        x = p[0]
-        y = p[1]
-        w0 = 30
-        weight = math.exp(((x-center)**2+(y-center)**2)/(-2*w0**2))
-        weightdf.iat[y,x]=weight
+#creates a Gaussian weighted dataframe, w0 eventually obtained from beamtracking
+#we want to turn a number of pixels off to equalize intensities between beams, but each pixel is weighted differently since the beam is Gaussian
+#this just gives a ballpark estimate of which pixels should be turned off, but in the end we need to resample the camera and iterate
+    global parGauss, calibrated
+    center = (beamsize-1)/2
+    w0 = 30 
+    weightArr = [[math.exp(((x-center)**2+(y-center)**2)/(-2*w0**2)) for x in np.arange(beamsize)] for y in np.arange(beamsize)]
+    np.asarray(weightArr)
+    #parGauss will be a full image with all 49 beams on, with a Gaussian weight projected over each individual parallelogram beam
+    parGauss = np.zeros((dmdY,dmdX))
 
-    weightdf /= weightdf.to_numpy().sum()
+    #for each square beam, transforms their positions as vectors using the COB matrix so that the beams become parallelograms
+    for i in range(rows):
+        for j in range(cols):
+                beamcalib = np.full((dmdY,dmdX), False)
+                angle = math.pi/4
+                #"active" references the vector position of each pixel relative to the top left corner of the active area, i.e. moves the origin to the top left of active area
+                #as a result, out-of-plane rotation occurs about the line going through the top left pixel of the active area with slope 1
+                active = np.zeros((beamsize*rows,beamsize*cols))
+                active[i*beamsize:(i+1)*beamsize,j*beamsize:(j+1)*beamsize] = weightArr
+                v = np.where(active!=0)
+                veclist = np.asarray(v)
+                COB = [[(1-1/math.cos(angle))/2, (1/math.cos(angle)+1)/2], [(1/math.cos(angle)+1)/2, (1-1/math.cos(angle))/2]]
+                reflect = [[-1,0],[0,1]]
+                transform = np.matmul(reflect,COB)
+                newpos = (np.around(np.matmul(transform, veclist))).astype(int)
+                newpos[0]=np.add(newpos[0],beamsize*cols)
+                for vec,pos in zip(veclist.T,newpos.T):
+                    #assigns each pixel in the parallelogram the weight of its corresponding pixel in a square Gaussian, remember that each pixel in the square each mapped to multiple pixels in the parallelogram
+                    #notice that without adding some redundancy, there are diagonal gaps due to Python rounding in the final parallelogram because the area gets scaled up, so one-to-one mapping will not cover the full parallelogram
+                    #so we also fill in each pixel above and to the right of all the new vectors calculated from the one-to-one mapping
+                    parGauss[minY+pos[0],minX+pos[1]]=active[vec[0],vec[1]]
+                    parGauss[minY+pos[0]-1,minX+pos[1]]=active[vec[0],vec[1]]
+                    parGauss[minY+pos[0],minX+pos[1]+1]=active[vec[0],vec[1]]
+                    parGauss[minY+pos[0]-1,minX+pos[1]+1]=active[vec[0],vec[1]]
+                    #while looping through all the transformed positions, we also populate the calibrated array with full intensity single beam images
+                    beamcalib[minY+pos[0],minX+pos[1]]=True
+                    beamcalib[minY+pos[0]-1,minX+pos[1]]=True
+                    beamcalib[minY+pos[0],minX+pos[1]+1]=True
+                    beamcalib[minY+pos[0]-1,minX+pos[1]+1]=True
+                active[i*beamsize:(i+1)*beamsize,j*beamsize:(j+1)*beamsize] = np.zeros((beamsize,beamsize))
+                calibrated.append(beamcalib)
 
-    #sets total intensity
-    fullInten = pd.DataFrame([[255]*beamsize]*beamsize)
-    maxInten = weightdf.mul(fullInten)
-    maxInt = maxInten.to_numpy().sum()
+    #normalizes Gaussian
+    parGauss /= np.sum(parGauss)
+    parGauss *= rows*cols
 
-camArray = [[5,4,3,5],[5,3,4,5],[1,3,4,5],[5,2,4,5]]
 
+camArray = [[5,2,3,5],[4,3,4,2],[1,3,2,5],[1,2,4,3]]
+
+#calibrates by taking away random pixels one by one and counting up their intensities according to Gaussian weighting
 def calibrate(camArray):
-#finds first iteration of calbirated array
+#finds first iteration of calibrated array, which is the equalized baseline pattern that we will use for all images
 #we want updated camera data each time we iterate
 
-    flatCalibArr = processCamData(camArray)
-    global calibDict
-    intenTol = float(input("Enter the desired tolerance in intensity: ") or "0.1")
-    for i in range(1,cols*rows+1):
+    calibArr = processCamData(camArray)
+    global calibrated
+    #gramlist stores list of vectors (with origin shifted to corner of active area) in each parallelogram
+    gramlist = []
 
-        inten = flatCalibArr[i-1]
-        inten*=100
-        currentdf = calibDict["b{}".format(i)]
+    for i,row in enumerate(calibArr):
+        for j,inten in enumerate(row):
+                beamindex = i*cols+j
+                currentbeam = calibrated[beamindex]
 
-        #gives random sample of pixels to be turned off
-        n = math.floor((1-inten/100)*beamsize*beamsize)
-        randoff = random.sample(dfEntries, n)
+                angle = math.pi/4
+                active = np.zeros((beamsize*rows,beamsize*cols))
+                active[i*beamsize:(i+1)*beamsize,j*beamsize:(j+1)*beamsize] = np.full((beamsize,beamsize), True)
+                v = np.where(active)
+                veclist = np.asarray(v)
+                COB = [[(1-1/math.cos(angle))/2, (1/math.cos(angle)+1)/2], [(1/math.cos(angle)+1)/2, (1-1/math.cos(angle))/2]]
+                reflect = [[-1,0],[0,1]]
+                transform = np.matmul(reflect,COB)
+                newpos = (np.around(np.matmul(transform, veclist))).astype(int)
+                print(newpos)
+                newpos[0]=np.add(newpos[0],beamsize*cols)
+                print(newpos)
+                active[i*beamsize:(i+1)*beamsize,j*beamsize:(j+1)*beamsize] = np.full((beamsize,beamsize), False)
 
-        for p in randoff:
-            row = p[0]
-            col = p[1]
-            currentdf.at[row,col] = 0
+                #poslist is just gramlist with duplicates
+                poslist = []
+                for pos in newpos.T:
+                    poslist.append([pos[0],pos[1]])
+                    poslist.append([pos[0]-1,pos[1]])
+                    poslist.append([pos[0],pos[1]+1])
+                    poslist.append([pos[0]-1,pos[1]+1])
+                
+                #gets rid of duplicates from poslist
+                poslist.sort()
+                dupeless = list(poslist for poslist,_ in itertools.groupby(poslist))
+                gramlist.append(dupeless)
 
-        totInten = weightdf.mul(currentdf)
-        totInt = totInten.to_numpy().sum()
-        actualInt = (totInt/maxInt)*100
-
-        while actualInt<inten-intenTol or actualInt>inten+intenTol:
-            n = math.floor((abs(inten-actualInt)/100*beamsize*beamsize))
-            randoff = random.sample(dfEntries, n)
-
-            for p in randoff:
-                row = p[0]
-                col = p[1]
-                if actualInt>inten:
-                    currentdf.at[row,col] = 0
-                else:
-                    currentdf.at[row,col] = 255
-
-            totInten = weightdf.mul(currentdf)
-            totInt = totInten.to_numpy().sum()
-            actualInt = (totInt/maxInt)*100
-        
-    with open('calibSave.json', 'w') as fp:
-        json.dump(calibDict, fp, cls=JSONEncoder)
-
-    with open('intenSave.txt', 'w') as filehandle:
-        json.dump(camArray, filehandle)
-
-    #saves calibDict and camArray to external files calibSave and intenSave
+                intencount = 0
+                while intencount<1-inten:
+                    pos = random.choice(dupeless)
+                    if currentbeam[minY+pos[0],minX+pos[1]]:
+                        currentbeam[minY+pos[0],minX+pos[1]]=False
+                        intencount+=parGauss[minY+pos[0],minX+pos[1]]
+                
+    np.save("calibSave.npy", calibrated)
+    np.save("intenSave.npy", camArray)
+    np.save('gramSave.npy', np.array(gramlist,dtype=object), allow_pickle=True)
+    #saves calibrated,camArray, and gramlist to external files calibSave,intenSave, and gramSave so that we can access them between instances of accessing camera
 
 def iterCal(camArray):
 
-    global calibDict
-    data = json.load(open('calibSave.json'))
-    calibDict = {
-        key: pd.DataFrame(data[key])
-        for key in data
-    }
-    
-    with open('intenSave.txt', 'r') as filehandle:
-        refInten = json.load(filehandle)
-    #accesses external file calibSave and set it equal to global calibDict, access intenSave and set it equal to refInten
-    flatCalibArr = np.ravel(np.divide(camArray,refInten))
-    refFlat = processCamData(refInten)
+    global calibrated
+    calibrated = np.load("calibSave.npy")
+    #refInten is just the camArray from the first calibration
+    refInten = np.load("intenSave.npy")
+    gramlist = np.load("gramSave.npy", allow_pickle=True)
+    #accesses external file calibSave and set it equal to global calibrated, access intenSave and set it equal to refInten, access gramSave and set it equal to gramlist
+    calibArr = np.divide(camArray,refInten)
+    ref = processCamData(refInten)
 
-    intenTol = float(input("Enter the desired tolerance in intensity: ") or "0.1")
-    for i in range(1,cols*rows+1):
+    #loops through rows and columns of the two rowsxcols 2D arrays calibArr, ref in parallel
+    for i,row in enumerate(zip(calibArr,ref)):
+        for j,col in enumerate(zip(row[0],row[1])):
+            beamindex = i*cols+j
+            currentbeam = calibrated[beamindex]
+            intencount = 0
+            inten = col[0]
+            refInt = col[1]
+            dupeless = gramlist[beamindex]
 
-        inten = flatCalibArr[i-1]
-        inten*=100
-        refInt = refFlat[i-1]
-        refInt*=100
-        currentdf = calibDict["b{}".format(i)]
-        currentdf.columns = range(currentdf.columns.size)
+            #simply takes away or adds back the intensity equal to the difference between the desired percentage of original intensity and the actual percentage of original intensity
+            #"desired percentage of original intensity" means the percentage needed from the first calibration to make all beams equal
+            if refInt<inten:
+                while intencount<inten-refInt:
+                    pos = random.choice(dupeless)
+                    if currentbeam[minY+pos[0],minX+pos[1]]:
+                        currentbeam[minY+pos[0],minX+pos[1]]=False
+                        intencount+=parGauss[minY+pos[0],minX+pos[1]]                
 
-        totInten = weightdf.mul(currentdf)
-        totInt = totInten.to_numpy().sum()
-        calibInt = (totInt/maxInt)*100
+            if refInt>inten:
+                while intencount<refInt-inten:
+                    pos = random.choice(dupeless)
+                    if not currentbeam[minY+pos[0],minX+pos[1]]:
+                        currentbeam[minY+pos[0],minX+pos[1]]=True
+                        intencount+=parGauss[minY+pos[0],minX+pos[1]]
 
-        #gives random sample of pixels to be turned off
-        n = math.floor((abs(inten-refInt))/100*beamsize*beamsize)
-        randoff = random.sample(dfEntries, n)
+    vis = plt.imshow(calibrated[2])
+    vis.set_cmap('binary')
+    plt.show()
 
-        for p in randoff:
-            row = p[0]
-            col = p[1]
-            if inten>refInt:
-                currentdf.iat[row,col] = 0
-            else:
-                currentdf.iat[row,col] = 255
-
-        totInten = weightdf.mul(currentdf)
-        totInt = totInten.to_numpy().sum()
-        actualInt = (totInt/maxInt)*100
-
-        newTarget = calibInt-(inten-refInt)
-
-        while actualInt<newTarget-intenTol or actualInt>newTarget+intenTol:
-            n = math.floor((abs(newTarget-actualInt)/100*beamsize*beamsize))
-            randoff = random.sample(dfEntries, n)
-
-            for p in randoff:
-                row = p[0]
-                col = p[1]
-                if actualInt>newTarget:
-                    currentdf.at[row,col] = 0
-                else:
-                    currentdf.at[row,col] = 255
-
-            totInten = weightdf.mul(currentdf)
-            totInt = totInten.to_numpy().sum()
-            actualInt = (totInt/maxInt)*100
-
-        print(actualInt)
-
-    with open('calibSave.json', 'w') as fp:
-        json.dump(calibDict, fp, cls=JSONEncoder)
+    np.save("calibSave.npy", calibrated)
 
     #save calibDict to external file calibSave
 
 
-
-#Wraps active area so that entire dataframe is 1280x800
-def wrap(active):
-    leftWrapSize = centerX-beamsize*cols//2
-    rightWrapSize = dmdX-beamsize*cols-leftWrapSize
-    upperWrapSize = centerY-beamsize*rows//2
-    lowerWrapSize = dmdY-beamsize*rows-upperWrapSize
-
-    leftdf = pd.DataFrame([[0]*leftWrapSize]*(beamsize*rows))
-    rightdf = pd.DataFrame([[0]*rightWrapSize]*(beamsize*rows))
-    image = pd.concat([leftdf,active,rightdf], axis=1, ignore_index=True)
-
-    upperdf = pd.DataFrame([[0]*dmdX]*upperWrapSize)
-    lowerdf = pd.DataFrame([[0]*dmdX]*lowerWrapSize)
-    image = pd.concat([upperdf,image,lowerdf], ignore_index=True)
-
-    return image
-
-imgSeq = {}
-imgNum = 0
-
-def createLibrary():
-    global imgSeq, imgNum
-    imgSeq = {}
-    imgNum = 0
-    alloff()
-    allon()
-    onebeam()
-    checkerone()
-    checkertwo()
-    return imgSeq
-
-#Combines all beams into one big dataframe called "active"
-#beamDict2 is a dictionary of rows of beams
-#Creates "all off" image
-def alloff():
-    global imgSeq, imgNum
-    beamDict2 = {}
-    imgNum += 1
-    for i in range(0,rows):
-        arr = []
-        for j in range(i*cols+1,(i+1)*cols+1):
-            arr.append(pd.DataFrame([[0]*beamsize]*beamsize))
-        beamDict2["row{}".format(i+1)]=pd.concat(arr, axis=1, ignore_index=True)
-
-    arr=[]
-    for df in beamDict2.values():
-        arr.append(df)
-    active = pd.concat(arr, ignore_index=True)
-    img = wrap(active)
-    imgSeq["img{}".format(imgNum)] = img
-
-#Creates "all on" image
-def allon():
-    global imgSeq, imgNum
-    beamDict2 = {}
-    imgNum += 1
-    for i in range(0,rows):
-        arr = []
-        for j in range(i*cols+1,(i+1)*cols+1):
-            arr.append(calibDict["b{}".format(j)])
-        beamDict2["row{}".format(i+1)]=pd.concat(arr, axis=1, ignore_index=True)
-
-    arr=[]
-    for df in beamDict2.values():
-        arr.append(df)
-    active = pd.concat(arr, ignore_index=True)
-    img = wrap(active)
-    imgSeq["img{}".format(imgNum)] = img
-
-#generates single beam images
-def onebeam():
-    global imgSeq, imgNum
-    for i in range(1, cols*rows+1):
-        beamDict = {}
-        imgNum += 1
-        for j in range(1,cols*rows+1):
-            if j==i:
-                beamDict["b{}".format(j)] = calibDict["b{}".format(j)]
-            else:
-                beamDict["b{}".format(j)] = pd.DataFrame([[0]*beamsize]*beamsize)
-
-        beamDict2 = {}
-        for k in range(0,rows):
-            arr = []
-            for l in range(k*cols+1,(k+1)*cols+1):
-                arr.append(beamDict["b{}".format(l)])
-            beamDict2["row{}".format(k+1)]=pd.concat(arr, axis=1, ignore_index=True)
-
-        arr=[]
-        for df in beamDict2.values():
-            arr.append(df)
-        active = pd.concat(arr, ignore_index=True)
-        img = wrap(active)
-        imgSeq["img{}".format(imgNum)] = img
-
-#generates first checkerboard pattern
-def checkerone():
-    global imgSeq, imgNum
-    beamDict2 = {}
-    imgNum += 1
-    for i in range(0,rows):
-        arr = []
-        for j in range(i*cols+1,(i+1)*cols+1):
-            if cols%2==1:
-                if j%2==0:
-                    arr.append(calibDict["b{}".format(j)])
-                else:
-                    arr.append(pd.DataFrame([[0]*beamsize]*beamsize))
-            else:
-                if i%2==0:
-                    if j%2==0:
-                        arr.append(calibDict["b{}".format(j)])
-                    else:
-                        arr.append(pd.DataFrame([[0]*beamsize]*beamsize)) 
-                else:
-                    if j%2==1:
-                        arr.append(calibDict["b{}".format(j)])
-                    else:
-                        arr.append(pd.DataFrame([[0]*beamsize]*beamsize))  
-
-        beamDict2["row{}".format(i+1)]=pd.concat(arr, axis=1, ignore_index=True)
-
-    arr=[]
-    for df in beamDict2.values():
-        arr.append(df)
-    active = pd.concat(arr, ignore_index=True)
-    img = wrap(active)
-    imgSeq["img{}".format(imgNum)] = img
-
-#generates second checkerboard pattern
-def checkertwo():
-    global imgSeq, imgNum
-    beamDict2 = {}
-    imgNum += 1
-    for i in range(0,rows):
-        arr = []
-        for j in range(i*cols+1,(i+1)*cols+1):
-            if cols%2==1:
-                if j%2==1:
-                    arr.append(calibDict["b{}".format(j)])
-                else:
-                    arr.append(pd.DataFrame([[0]*beamsize]*beamsize))
-            else:
-                if i%2==1:
-                    if j%2==0:
-                        arr.append(calibDict["b{}".format(j)])
-                    else:
-                        arr.append(pd.DataFrame([[0]*beamsize]*beamsize)) 
-                else:
-                    if j%2==1:
-                        arr.append(calibDict["b{}".format(j)])
-                    else:
-                        arr.append(pd.DataFrame([[0]*beamsize]*beamsize))  
-
-        beamDict2["row{}".format(i+1)]=pd.concat(arr, axis=1, ignore_index=True)
-
-    arr=[]
-    for df in beamDict2.values():
-        arr.append(df)
-    active = pd.concat(arr, ignore_index=True)
-    img = wrap(active)
-    imgSeq["img{}".format(imgNum)] = img
+#######CODE HERE#######
 
 setup()
 calibSetup()
-#camArray = getCamData(), each new camArray is retrieved from camera intensity program
-camArray = [[5,4,3,5],[5,3,4,5],[1,3,4,5],[5,2,4,5]]
+camArray = np.ones((7,7))
 calibrate(camArray)
-camArray = [[1.1,0.9,1,1],[1,1,1,1],[1,1,1,1],[1,1,1,1]]
-iterCal(camArray)
+
+#example of iterated calibration, remember to change cols and rows to 4x4 in setup()
+""" camArray = [[5,2,2,5],[4,3,4,2],[1,3,2,5],[1,2,4,3]]
+calibrate(camArray)
+camArray = [[1,1.5,0.5,1],[1,1,1,1],[1,1,1,1],[1,1,1,1]]
+iterCal(camArray) """
+
+#example of taking real-time camera input
+""" camArray = beamtracking.getIntenList()
+calibrate(camArray) """
 
 
-imgs = createLibrary()
-image = imgs["img2"]
-ig = image.to_numpy()
-vis = plt.imshow(ig)
-vis.set_cmap('binary')
-plt.show()
-
-#converts image sequence into 1D array for input into DMD
-def dmdIn():
-    DMDseq = []
-    for df in createLibrary().values():
-        ndArr = df.to_numpy()
-        image = np.ravel(ndArr)
-        DMDseq.extend(image)
-    return DMDseq
+#######CODE HERE#######
