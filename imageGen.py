@@ -77,7 +77,7 @@ def horiscan():
     start = int(input("Enter starting frame: ") or str(0))
     end = int(input("Enter end frame: ") or str(int(dmdX/width)))
     for i in np.arange(start, end):
-        currentArr[:,i*width:(i+1)*width] = np.full((dmdY,width), 255)
+        currentArr[:,i*width:(i+1)*width] = np.full((dmdY,width), True)
         imgSeq.extend(np.ravel(currentArr))
         resetcurrArr()
 
@@ -94,7 +94,7 @@ def vertscan():
     start = int(input("Enter starting frame: ") or str(0))
     end = int(input("Enter end frame: ") or str(int(dmdY/width)))
     for i in np.arange(start, end):
-        currentArr[i*width:(i+1)*width,:] = np.full((width,dmdX), 255)
+        currentArr[i*width:(i+1)*width,:] = np.full((width,dmdX), True)
         imgSeq.extend(np.ravel(currentArr))
         resetcurrArr()
 
@@ -142,10 +142,16 @@ def custombeam():
 
 def randoneperrow():
     global imgSeq, currentArr
+    for i in range(rows):
+        for j in range(cols):
+            turnOn(i,j)
     for i in np.arange(rows):
         j = random.choice(range(cols))
-        turnOn(i,j)
+        turnOff(i,j)
     imgSeq.extend(np.ravel(currentArr))
+    vis = plt.imshow(currentArr)
+    vis.set_cmap('binary')
+    plt.show()
     resetcurrArr()
 
 #generates all images with at most one beam on per row
@@ -210,7 +216,17 @@ def twobeams():
         
 #######CODE HERE#######
 setup()
-allBeamsOn()
+
+checkerone()
+checkertwo()
+
+randoneperrow()
+randoneperrow()
+randoneperrow()
+randoneperrow()
+randoneperrow()
+randoneperrow()
+randoneperrow()
 
 np.save("img.npy", np.asarray(imgSeq)*255)
 #######CODE HERE#######

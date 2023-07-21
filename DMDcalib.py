@@ -10,15 +10,17 @@ import beamtracking
 
 dmdX = 1280
 dmdY = 800
+dmdcenX = dmdX//2
+dmdcenY = dmdY//2
 
 def setup():
     #allows user to specify m x n beams
-    global cols, rows, beamsize, centerX, centerY, calibrated, minX, minY
+    global cols, rows, beamsize, centerX, centerY, calibrated, minX, minY     
     cols = 7
     rows = 7
 
     #enter desired square beamsize, before transformation into parallelograms
-    beamsize = 50
+    beamsize = 75
     if beamsize%2==0:
         beamsize-=1
 
@@ -30,7 +32,7 @@ def setup():
     minY = centerY-rows*beamsize//2
 
     #Creates "calibrated" which is our baseline array which will be our reference for the calibrated "on" beams
-    #will be all 0 outside of active area, during the setup it will set all beams to full and calibrate it down from there
+    #will be all 0 outside of beamcalib area, during the setup it will set all beams to full and calibrate it down from there
     calibrated = []
 
 def processCamData(camData):
@@ -57,32 +59,38 @@ def calibSetup():
     for i in range(rows):
         for j in range(cols):
                 beamcalib = np.full((dmdY,dmdX), False)
-                angle = math.pi/4
-                #"active" references the vector position of each pixel relative to the top left corner of the active area, i.e. moves the origin to the top left of active area
-                #as a result, out-of-plane rotation occurs about the line going through the top left pixel of the active area with slope 1
-                active = np.zeros((beamsize*rows,beamsize*cols))
-                active[i*beamsize:(i+1)*beamsize,j*beamsize:(j+1)*beamsize] = weightArr
+                angle = 0.77
+                #since out-of-plane rotation occurs about the axis going through the DMD center with pixel slope of 1, we shift the origin of pixel position vectors to the center
+                active = np.zeros((dmdY,dmdX))
+                active[minY+i*beamsize:minY+(i+1)*beamsize,minX+j*beamsize:minX+(j+1)*beamsize] = weightArr
                 v = np.where(active!=0)
                 veclist = np.asarray(v)
-                COB = [[(1-1/math.cos(angle))/2, (1/math.cos(angle)+1)/2], [(1/math.cos(angle)+1)/2, (1-1/math.cos(angle))/2]]
-                reflect = [[-1,0],[0,1]]
-                transform = np.matmul(reflect,COB)
-                newpos = (np.around(np.matmul(transform, veclist))).astype(int)
-                newpos[0]=np.add(newpos[0],beamsize*cols)
+                #shifting the origin for the position vectors before the transformation
+                veclist[0]=np.subtract(veclist[0],400)
+                veclist[1]=np.subtract(veclist[1],640)
+                COB = [[(1/math.cos(angle)-1)/2, (1/math.cos(angle)+1)/2], [(1/math.cos(angle)+1)/2, (1/math.cos(angle)-1)/2]]
+                newpos = (np.around(np.matmul(COB, veclist))).astype(int)
+
+                newpos[0]=np.add(newpos[0],400)
+                newpos[1]=np.add(newpos[1],640)
+                veclist[0]=np.add(veclist[0],400)
+                veclist[1]=np.add(veclist[1],640)
+
                 for vec,pos in zip(veclist.T,newpos.T):
                     #assigns each pixel in the parallelogram the weight of its corresponding pixel in a square Gaussian, remember that each pixel in the square each mapped to multiple pixels in the parallelogram
                     #notice that without adding some redundancy, there are diagonal gaps due to Python rounding in the final parallelogram because the area gets scaled up, so one-to-one mapping will not cover the full parallelogram
                     #so we also fill in each pixel above and to the right of all the new vectors calculated from the one-to-one mapping
-                    parGauss[minY+pos[0],minX+pos[1]]=active[vec[0],vec[1]]
-                    parGauss[minY+pos[0]-1,minX+pos[1]]=active[vec[0],vec[1]]
-                    parGauss[minY+pos[0],minX+pos[1]+1]=active[vec[0],vec[1]]
-                    parGauss[minY+pos[0]-1,minX+pos[1]+1]=active[vec[0],vec[1]]
+                    parGauss[pos[0],pos[1]]=active[vec[0],vec[1]]
+                    parGauss[pos[0]-1,pos[1]]=active[vec[0],vec[1]]
+                    parGauss[pos[0],pos[1]+1]=active[vec[0],vec[1]]
+                    parGauss[pos[0]-1,pos[1]+1]=active[vec[0],vec[1]]
                     #while looping through all the transformed positions, we also populate the calibrated array with full intensity single beam images
-                    beamcalib[minY+pos[0],minX+pos[1]]=True
-                    beamcalib[minY+pos[0]-1,minX+pos[1]]=True
-                    beamcalib[minY+pos[0],minX+pos[1]+1]=True
-                    beamcalib[minY+pos[0]-1,minX+pos[1]+1]=True
-                active[i*beamsize:(i+1)*beamsize,j*beamsize:(j+1)*beamsize] = np.zeros((beamsize,beamsize))
+                    beamcalib[pos[0],pos[1]]=True
+                    beamcalib[pos[0]-1,pos[1]]=True
+                    beamcalib[pos[0],pos[1]+1]=True
+                    beamcalib[pos[0]-1,pos[1]+1]=True
+            
+                active[minY+i*beamsize:minY+(i+1)*beamsize,minX+j*beamsize:minX+(j+1)*beamsize] = np.zeros((beamsize,beamsize))
                 calibrated.append(beamcalib)
 
     #normalizes Gaussian
@@ -99,7 +107,7 @@ def calibrate(camArray):
 
     calibArr = processCamData(camArray)
     global calibrated
-    #gramlist stores list of vectors (with origin shifted to corner of active area) in each parallelogram
+    #gramlist stores list of vectors (with origin shifted to corner of beamcalib area) in each parallelogram
     gramlist = []
 
     for i,row in enumerate(calibArr):
@@ -107,18 +115,19 @@ def calibrate(camArray):
                 beamindex = i*cols+j
                 currentbeam = calibrated[beamindex]
 
-                angle = math.pi/4
-                active = np.zeros((beamsize*rows,beamsize*cols))
-                active[i*beamsize:(i+1)*beamsize,j*beamsize:(j+1)*beamsize] = np.full((beamsize,beamsize), True)
+                angle = 0.77
+                active = np.zeros((dmdY,dmdX))
+                active[minY+i*beamsize:minY+(i+1)*beamsize,minX+j*beamsize:minX+(j+1)*beamsize] = np.full((beamsize,beamsize), True)
                 v = np.where(active)
                 veclist = np.asarray(v)
+
+                veclist[0]=np.subtract(veclist[0],400)
+                veclist[1]=np.subtract(veclist[1],640)
+
                 COB = [[(1-1/math.cos(angle))/2, (1/math.cos(angle)+1)/2], [(1/math.cos(angle)+1)/2, (1-1/math.cos(angle))/2]]
-                reflect = [[-1,0],[0,1]]
-                transform = np.matmul(reflect,COB)
-                newpos = (np.around(np.matmul(transform, veclist))).astype(int)
-                print(newpos)
-                newpos[0]=np.add(newpos[0],beamsize*cols)
-                print(newpos)
+                newpos = (np.around(np.matmul(COB, veclist))).astype(int)
+                newpos[0]=np.add(newpos[0],400)
+                newpos[1]=np.add(newpos[1],640)
                 active[i*beamsize:(i+1)*beamsize,j*beamsize:(j+1)*beamsize] = np.full((beamsize,beamsize), False)
 
                 #poslist is just gramlist with duplicates
@@ -137,9 +146,9 @@ def calibrate(camArray):
                 intencount = 0
                 while intencount<1-inten:
                     pos = random.choice(dupeless)
-                    if currentbeam[minY+pos[0],minX+pos[1]]:
-                        currentbeam[minY+pos[0],minX+pos[1]]=False
-                        intencount+=parGauss[minY+pos[0],minX+pos[1]]
+                    if currentbeam[pos[0],pos[1]]:
+                        currentbeam[pos[0],pos[1]]=False
+                        intencount+=parGauss[pos[0],pos[1]]
                 
     np.save("calibSave.npy", calibrated)
     np.save("intenSave.npy", camArray)
@@ -172,16 +181,16 @@ def iterCal(camArray):
             if refInt<inten:
                 while intencount<inten-refInt:
                     pos = random.choice(dupeless)
-                    if currentbeam[minY+pos[0],minX+pos[1]]:
-                        currentbeam[minY+pos[0],minX+pos[1]]=False
-                        intencount+=parGauss[minY+pos[0],minX+pos[1]]                
+                    if currentbeam[pos[0],pos[1]]:
+                        currentbeam[pos[0],pos[1]]=False
+                        intencount+=parGauss[pos[0],pos[1]]                
 
             if refInt>inten:
                 while intencount<refInt-inten:
                     pos = random.choice(dupeless)
-                    if not currentbeam[minY+pos[0],minX+pos[1]]:
-                        currentbeam[minY+pos[0],minX+pos[1]]=True
-                        intencount+=parGauss[minY+pos[0],minX+pos[1]]
+                    if not currentbeam[pos[0],pos[1]]:
+                        currentbeam[pos[0],pos[1]]=True
+                        intencount+=parGauss[pos[0],pos[1]]
 
     vis = plt.imshow(calibrated[2])
     vis.set_cmap('binary')
