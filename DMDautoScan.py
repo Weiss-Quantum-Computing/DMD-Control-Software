@@ -16,7 +16,8 @@ camera=pylon.InstantCamera(pylon.TlFactory.GetInstance().CreateFirstDevice())
 camera.Open()
 camera.ExposureAuto.SetValue("Off")
 #sets exposure time of camera
-camera.ExposureTime.SetValue(4000)
+expotime = 4000
+camera.ExposureTime.SetValue(expotime)
 
 DMDseq = np.load("img.npy")
 imgNum = int(DMDseq.size/(DMD.nSizeX*DMD.nSizeY))
@@ -24,19 +25,26 @@ imgList = np.split(DMDseq, imgNum)
 imgCount = -1
 brightest = 0 
 prev = -1
-DMD.SeqAlloc(nbImg = 1, bitDepth = 1)
 #image count starts from 0, so for scan, the pixel range of the current image is [imgCount*width,(imgCount+1)*width)
 try:
-    while brightest>=prev:
+    while brightest>=prev-1:
         imgCount+=1
+        print(imgCount)
+        #DMD.FreeSeq() undoes allocation so DMD.SeqAlloc() must go inside the loop
+        DMD.SeqAlloc(nbImg = 1, bitDepth = 1)
         DMD.SeqPut(imgData = imgList[imgCount])
         DMD.SetTiming(pictureTime = 1000000)
         print("Current image # is " + str(imgCount))
+        #takes into account the time between the trigger and the actual projection
+        trigToProjDelay = ALP4.SeqInquire(self=DMD, inquireType=ALP_MAX_TRIGGER_IN_DELAY)/1000000
         DMD.Run()
-        #takes a picture using camera
-        result = camera.GrabOne()
+        #ensures that the desired image appears on the camera before taking a picture
+        time.sleep(trigToProjDelay)
+        #takes a picture using camera, wait for grabResult for a duration depending on the exposure time (with a 1ms buffer)
+        result = camera.GrabOne(expotime+1000)
         prev = brightest
-        brightest = np.sum(result.Array)
+        brightest = np.amax(result.Array)
+        print(brightest)
 
         DMD.Halt()
         DMD.FreeSeq()
