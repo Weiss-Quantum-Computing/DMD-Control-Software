@@ -8,7 +8,8 @@ from pandas import DataFrame
 from scipy.optimize import curve_fit
 from pypylon import pylon
 
-def setup():
+#img is the camera image to analyse: a 2D array (e.g. camera.GrabOne(...).Array, see the example below) or the path of an image file
+def setup(img):
     global xdim,ydim,sep,df,imgarr
 
     """ #accessing camera example
@@ -24,9 +25,10 @@ def setup():
     camera.Close() """
 
 
-    image = Image.open(r"C:\Users\rdbb7\DMD Code\hello\ResearchWeiss\test.png")
+    if isinstance(img, str):
+        img = Image.open(img)
 
-    imgarr = asarray(image)
+    imgarr = asarray(img)
     xdim = imgarr.shape[1]
     ydim = imgarr.shape[0]
     sep = 30 #beam separation is expected distance between adjacent centers if entire lattice is filled in
@@ -236,8 +238,8 @@ def getparalist():
     return paralist
 
 #eventually just return list of single intensities, how do we get one intensity from the x and y fits?
-def getIntenList():
-    setup()
+def getIntenList(img):
+    setup(img)
     parlist = getparalist()
     #gets dimensions of the beam lattice
     y = max(plist, key=lambda tup: tup[0])
@@ -251,7 +253,11 @@ def getIntenList():
 
 #######CODE HERE#######
 
-getIntenList()
+#only runs when beamtracking.py is started directly, not when DMDcalib imports it
+#usage: python beamtracking.py [image file], default is the original test image
+if __name__ == '__main__':
+    import sys
+    getIntenList(sys.argv[1] if len(sys.argv)>1 else r"C:\Users\rdbb7\DMD Code\hello\ResearchWeiss\test.png")
 
 #can get lattice dimensions by taking max poslist[0] and max poslist[1] and use those in np.reshape(), since DMDcalib takes in 2D np array as camera input
 

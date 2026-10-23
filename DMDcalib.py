@@ -195,7 +195,7 @@ camArray = [[1,1.5,0.5,1],[1,1,1,1],[1,1,1,1],[1,1,1,1]]
 iterCal(camArray) """
 
 #example of taking real-time camera input
-""" camArray = beamtracking.getIntenList()
+""" camArray = beamtracking.getIntenList(img) #img = camera image array, or the path of an image file
 calibrate(camArray) """
 
 
