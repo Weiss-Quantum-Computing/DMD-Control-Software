@@ -9,8 +9,9 @@ DMD = ALP4(version = "4.3")
 
 DMD.Initialize()
 
+#FreeSeq() only frees a sequence allocated through this handle, so right after Initialize() it cannot clear on-board memory still in use; only report it
 if DMD.DevInquire(ALP_AVAIL_MEMORY)<55924:
-    DMD.FreeSeq()
+    print("Warning: DMD on-board memory is not empty after Initialize(); this session cannot free it")
 
 camera = None
 seqAllocated = False

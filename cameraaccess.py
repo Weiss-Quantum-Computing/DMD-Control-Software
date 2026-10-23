@@ -10,6 +10,7 @@ number_of_images=1
 
 #exitcode of sample application 
 exitcode=0
+camera=None
 
 
 ### BOOT-UP SEQUENCE ####
@@ -76,6 +77,10 @@ try:
 except genicam.GenericException as e: 
     print("An error has occured")
     print(e.GetDescription())
-    exitcde=1
+    exitcode=1
+#closes the camera also when an error ended the grab early
+finally:
+    if camera is not None and camera.IsOpen():
+        camera.Close()
 
 sys.exit(exitcode)

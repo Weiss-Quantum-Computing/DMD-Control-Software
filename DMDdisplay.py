@@ -10,28 +10,33 @@ DMD = ALP4(version = "4.3")
 
 DMD.Initialize()
 
-#frees onboard memory if the onboard memory was not cleared last time it was powered down
+#FreeSeq() only frees a sequence allocated through this handle, so right after Initialize() it cannot clear on-board memory still in use; only report it
 if DMD.DevInquire(ALP_AVAIL_MEMORY)<55924:
-    DMD.FreeSeq()
+    print("Warning: DMD on-board memory is not empty after Initialize(); this session cannot free it")
 
-#loads image sequence imgSeq generated from imageGen
-DMDseq = np.load("img.npy")
-#determines how many images are in DMDseq using the length of the array
-imgNum = int(DMDseq.size/(DMD.nSizeX*DMD.nSizeY))
-
-DMD.SeqAlloc(nbImg = imgNum, bitDepth = 1)
-DMD.SeqPut(imgData = DMDseq)
-#sets how long each image should be displayed, in microseconds
-DMD.SetTiming(pictureTime = 1000000)
-
-DMD.Run()
-
-#displays the sequence for time.sleep(x) x number of seconds, can safely end DMD operation with Ctrl-C
+seqAllocated = False
+#everything after Initialize() is inside try/finally, so the sequence and the DMD are released on any error, not only on Ctrl+C
 try:
-    time.sleep(60)
-except KeyboardInterrupt:
-    pass
-    
-DMD.Halt()
-DMD.FreeSeq()
-DMD.Free()
+    #loads image sequence imgSeq generated from imageGen
+    DMDseq = np.load("img.npy")
+    #determines how many images are in DMDseq using the length of the array
+    imgNum = int(DMDseq.size/(DMD.nSizeX*DMD.nSizeY))
+
+    DMD.SeqAlloc(nbImg = imgNum, bitDepth = 1)
+    seqAllocated = True
+    DMD.SeqPut(imgData = DMDseq)
+    #sets how long each image should be displayed, in microseconds
+    DMD.SetTiming(pictureTime = 1000000)
+
+    DMD.Run()
+
+    #displays the sequence for time.sleep(x) x number of seconds, can safely end DMD operation with Ctrl-C
+    try:
+        time.sleep(60)
+    except KeyboardInterrupt:
+        pass
+finally:
+    DMD.Halt()
+    if seqAllocated:
+        DMD.FreeSeq()
+    DMD.Free()
