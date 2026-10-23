@@ -3,7 +3,6 @@ import numpy as np
 import pandas as pd
 import trackpy as tp
 import matplotlib.pyplot as plt
-from numpy import *
 from pandas import DataFrame
 from scipy.optimize import curve_fit
 from pypylon import pylon
@@ -28,7 +27,7 @@ def setup(img):
     if isinstance(img, str):
         img = Image.open(img)
 
-    imgarr = asarray(img)
+    imgarr = np.asarray(img)
     xdim = imgarr.shape[1]
     ydim = imgarr.shape[0]
     sep = 30 #beam separation is expected distance between adjacent centers if entire lattice is filled in
@@ -40,10 +39,10 @@ def setup(img):
 def getcenters():
     centerlist = list()
     for index,row in df.iterrows():
-        fy = int(floor(row['y']))
-        cy = int(ceil(row['y']))
-        fx = int(floor(row['x']))
-        cx = int(ceil(row['x']))
+        fy = int(np.floor(row['y']))
+        cy = int(np.ceil(row['y']))
+        fx = int(np.floor(row['x']))
+        cx = int(np.ceil(row['x']))
         m = max(imgarr[fy][fx],imgarr[fy][cx],imgarr[cy][fx],imgarr[cy][cx])
         if imgarr[fy][fx]==m:
             truey=fy
@@ -69,7 +68,7 @@ def getrowcol(clist):
 
     #each pass through the loop finds a row, defined by all beams with y-coord within sep/2 of a random beam's y-coord, we get a list of rows (single row is an array of centers in the same row)
     while clist1:
-        randi=random.choice(len(clist1))
+        randi=np.random.choice(len(clist1))
         cen=clist1[randi]
         row = []
         for c in clist1:
@@ -81,7 +80,7 @@ def getrowcol(clist):
 
     #each pass through the loop finds a column, defined by all beams with x-coord within sep/2 of a random beam's x-coord, we get a list of columns
     while clist2:
-        randi=random.choice(len(clist2))
+        randi=np.random.choice(len(clist2))
         cen=clist2[randi]
         col = []
         for c in clist2:
@@ -197,7 +196,7 @@ def getparalist():
         xss_res = np.sum(xresiduals**2)
         xss_tot = np.sum((xdist-np.mean(xdist))**2)
         xrsq = 1-(xss_res/xss_tot)
-        xpar = absolute(xpar)
+        xpar = np.absolute(xpar)
 
         adjy=0
         ydist = np.sum(beam, axis=1)
@@ -214,7 +213,7 @@ def getparalist():
         yss_res = np.sum(yresiduals**2)
         yss_tot = np.sum((ydist-np.mean(ydist))**2)
         yrsq = 1-(yss_res/yss_tot)
-        ypar = absolute(ypar)
+        ypar = np.absolute(ypar)
 
         center = [cen[1],cen[0]]
         rsq = [xrsq,yrsq]
