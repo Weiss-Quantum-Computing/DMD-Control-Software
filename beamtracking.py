@@ -172,7 +172,8 @@ def getparalist():
     clist = getcenters()
     plist = getlatticepos(clist)
     rowlist, collist = getrowcol(clist)
-    numrows = len(rowlist)
+    #number of lattice columns, from the lattice positions (also right when a column is empty or the array is not square)
+    ncols = max(p[1] for p in plist)+1
     rlist = getradii(clist,rowlist,collist)
     beamlist=isolatebeams(clist,rlist)
 
@@ -218,7 +219,7 @@ def getparalist():
         center = [cen[1],cen[0]]
         rsq = [xrsq,yrsq]
         #adds index so that the parameter list can be sorted in order of beams from left to right, top to bottom, paralist.sort() sorts by first element in tuple which is index
-        index = numrows*pos[0]+pos[1]
+        index = ncols*pos[0]+pos[1]
         par = (index,pos[0],pos[1],xpar[0],xpar[1],ypar[0],ypar[1],center[0],center[1],rsq[0],rsq[1])
         paralist.append(par)
 
@@ -236,7 +237,7 @@ def getparalist():
     paralist.sort()
     return paralist
 
-#eventually just return list of single intensities, how do we get one intensity from the x and y fits?
+#returns one intensity per beam: its integrated counts from the Gaussian fits, as a rows x cols array
 def getIntenList(img):
     setup(img)
     parlist = getparalist()
@@ -246,7 +247,9 @@ def getIntenList(img):
     rows = y[0]+1
     cols = x[1]+1
     print([(i[3],i[5]) for i in parlist])
-    intenlist = [(i[3]+i[5])/2 for i in parlist]
+    #each projected amplitude already integrates over the other axis (xI = I0*wy*sqrt(pi/2)), so the beam's total counts are
+    #xI*wx*sqrt(pi/2) = yI*wy*sqrt(pi/2); the mean of the two amplitudes alone would read a wider, dimmer beam the same as a narrower, brighter one
+    intenlist = [(i[3]*i[4]+i[5]*i[6])/2*np.sqrt(np.pi/2) for i in parlist]
     return np.reshape(intenlist, (rows,cols))
     
 
