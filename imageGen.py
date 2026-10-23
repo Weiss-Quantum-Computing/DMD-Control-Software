@@ -156,6 +156,7 @@ def randoneperrow():
     resetcurrArr()
 
 #generates all images with at most one beam on per row
+#WARNING: (cols+1)**rows images, 8**7 = 2,097,152 for 7x7, each a 1,024,000-element list entry: far beyond PC memory and DMD storage, only usable for small arrays
 def oneperrow():
     global imgSeq, currentArr
     #e.g. for 7 by 7 array, loops through every possible pattern of at most one beam in each of the seven rows, eight options per row, rows are independent of each other
@@ -203,6 +204,7 @@ def checkertwo():
     resetcurrArr()
 
 #generates all images with exactly two beams on
+#WARNING: (rows*cols choose 2) images, 1176 for 7x7, about 1.2e9 list entries: far beyond PC memory, only usable for small arrays
 def twobeams():
     global imgSeq, currentArr
     #loops through all 49choose2 pairs of beams, then uses // and % to get the row and column number
