@@ -42,14 +42,15 @@ def turnOff(row,col):
     currentArr = np.logical_and(currentArr,~calibrated[row*cols+col])
 
 #directly adds a fully on image to the sequence
+#stored as True like every other pattern; the save at the end scales on pixels to 255 once (storing 255 here gave 255*255)
 def fullOn():
     global imgSeq
-    imgSeq.extend(np.full(dmdY*dmdX, 255))
+    imgSeq.extend(np.full(dmdY*dmdX, True))
 
 #directly adds a fully off image to the sequence
 def fullOff():
     global imgSeq
-    imgSeq.extend(np.zeros(dmdY*dmdX))
+    imgSeq.extend(np.full(dmdY*dmdX, False))
 
 #directly adds an image with all beams in the active area on
 def allBeamsOn():
@@ -228,5 +229,6 @@ randoneperrow()
 randoneperrow()
 randoneperrow()
 
-np.save("img.npy", np.asarray(imgSeq)*255)
+#8-bit frames for ALP4lib SeqPut (on = 255, off = 0)
+np.save("img.npy", np.asarray(imgSeq, dtype=np.uint8)*255)
 #######CODE HERE#######
